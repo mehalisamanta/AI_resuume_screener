@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import re
 import io
+import os
 from datetime import datetime
 from typing import Dict
 from groq import Groq
@@ -10,12 +11,18 @@ from groq import Groq
 import PyPDF2
 import docx2txt
 import plotly.express as px
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 # Import your custom modules
 from config import settings
 from sharepoint_uploader import SharePointUploader
+
+# --------------------------------------------------
+# 0. THE BRIDGE (Mentor's Update)
+# --------------------------------------------------
+# Map Streamlit secrets to environment variables so modules like 
+# 'config.py' or 'msal' can find them via os.getenv()
+for key, value in st.secrets.items():
+    os.environ[key] = str(value)
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -42,19 +49,21 @@ st.markdown("""
 # --------------------------------------------------
 @st.cache_resource
 def init_groq_client():
-    api_key = settings.GROQ_API_KEY
+    # Retrieve from secrets/env via the bridge
+    api_key = os.environ.get("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY")
     if not api_key:
-        raise RuntimeError("GROQ_API_KEY missing in environment/secrets")
+        st.error("GROQ_API_KEY missing in secrets")
+        return None
     return Groq(api_key=api_key)
 
 @st.cache_resource
 def init_sharepoint():
     try:
-        settings.validate()
+        # These will now be available in os.environ thanks to the bridge above
         return SharePointUploader(
-            tenant_id=settings.TENANT_ID,
-            client_id=settings.CLIENT_ID,
-            client_secret=settings.CLIENT_SECRET
+            tenant_id=os.environ.get("AZURE_TENANT_ID"),
+            client_id=os.environ.get("AZURE_CLIENT_ID"),
+            client_secret=os.environ.get("AZURE_CLIENT_SECRET")
         )
     except Exception as e:
         st.sidebar.error(f"SharePoint Config Error: {e}")
@@ -115,6 +124,10 @@ def rank_candidates(client, df, jd_text):
 # MAIN APP
 # --------------------------------------------------
 def main():
+    # CRITICAL: Initialize session state keys to prevent AttributeErrors
+    if "df" not in st.session_state:
+        st.session_state.df = None
+
     st.markdown('<h1 class="main-header">AI Resume Screening System</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Powered by Groq & SharePoint</p>', unsafe_allow_html=True)
 
@@ -129,9 +142,6 @@ def main():
         else: st.warning("SharePoint Auth Missing")
         
         mask_pii_enabled = st.checkbox("Enable PII Masking", value=True)
-
-    if "df" not in st.session_state:
-        st.session_state.df = None
 
     tabs = st.tabs(["📤 Upload", "📊 Database", "🎯 Match", "📈 Analytics"])
 
@@ -151,7 +161,7 @@ def main():
                 st.session_state.df = pd.DataFrame(records)
                 st.success(f"Processed {len(records)} resumes")
 
-    # 2. DATABASE TAB (Updated with Dynamic SharePoint Link)
+    # 2. DATABASE TAB (SharePoint Export)
     with tabs[1]:
         if st.session_state.df is not None:
             st.dataframe(st.session_state.df, use_container_width=True)
@@ -159,11 +169,9 @@ def main():
             st.divider()
             st.subheader("🌐 Export to SharePoint")
             
-            # User inputs the SharePoint URL here
-            sp_url = st.text_input(
-                "SharePoint Site URL", 
-                placeholder="https://yourtenant.sharepoint.com/sites/YourSiteName"
-            )
+            # Use Site URL from secrets as default if it exists
+            default_sp_url = os.environ.get("SHAREPOINT_SITE", "")
+            sp_url = st.text_input("SharePoint Site URL", value=default_sp_url)
             
             if st.button("🚀 Push to SharePoint"):
                 if not sp_url:
@@ -171,31 +179,31 @@ def main():
                 elif sp_uploader:
                     with st.spinner("Resolving Site IDs and Uploading..."):
                         try:
-                            # 1. Resolve IDs from the link provided by user
                             site_id, drive_id = sp_uploader.resolve_site_and_drive(sp_url)
                             
-                            # 2. Prepare CSV Buffer
                             csv_buffer = io.BytesIO()
                             st.session_state.df.to_csv(csv_buffer, index=False)
                             csv_buffer.seek(0)
                             
-                            # 3. Upload
                             file_name = f"candidates_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
                             sp_uploader.upload_csv_to_sharepoint(
                                 site_id=site_id,
                                 drive_id=drive_id,
-                                folder_path="General", # You can make this a text_input too
+                                folder_path="General", 
                                 file_name=file_name,
                                 csv_buffer=csv_buffer
                             )
-                            st.success(f"Successfully uploaded '{file_name}' to SharePoint!")
+                            st.success(f"Successfully uploaded to SharePoint!")
                         except Exception as e:
                             st.error(f"SharePoint Error: {e}")
                 else:
-                    st.error("SharePoint uploader not initialized. Check your Secrets.")
+                    st.error("SharePoint uploader not initialized.")
 
             st.divider()
-            st.download_button("Download CSV Locally", st.session_state.df.to_csv(index=False), "candidates.csv", "text/csv")
+            csv_data = st.session_state.df.to_csv(index=False).encode('utf-8')
+            st.download_button("Download CSV Locally", csv_data, "candidates.csv", "text/csv")
+        else:
+            st.info("No resumes processed yet. Go to the Upload tab.")
 
     # 3. MATCH TAB
     with tabs[2]:
@@ -207,12 +215,16 @@ def main():
                     with st.expander(f"🎯 {r.get('name')}"):
                         st.write("**Strengths:**", r.get("strengths"))
                         st.write("**Gaps:**", r.get("gaps"))
+        elif st.session_state.df is None:
+            st.warning("Please upload resumes first.")
 
     # 4. ANALYTICS TAB
     with tabs[3]:
         if st.session_state.df is not None:
             fig = px.histogram(st.session_state.df, x="experience_years", title="Experience Distribution")
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Upload resumes to see analytics.")
 
 if __name__ == "__main__":
     main()
