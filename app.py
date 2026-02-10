@@ -50,7 +50,6 @@ def init_groq_client():
 @st.cache_resource
 def init_sharepoint():
     try:
-        # Validate settings first
         settings.validate()
         return SharePointUploader(
             tenant_id=settings.TENANT_ID,
@@ -127,6 +126,7 @@ def main():
         
         if client: st.success("Groq Connected")
         if sp_uploader: st.success("SharePoint Ready")
+        else: st.warning("SharePoint Auth Missing")
         
         mask_pii_enabled = st.checkbox("Enable PII Masking", value=True)
 
@@ -151,38 +151,51 @@ def main():
                 st.session_state.df = pd.DataFrame(records)
                 st.success(f"Processed {len(records)} resumes")
 
-    # 2. DATABASE TAB (SharePoint Integration Here)
+    # 2. DATABASE TAB (Updated with Dynamic SharePoint Link)
     with tabs[1]:
         if st.session_state.df is not None:
             st.dataframe(st.session_state.df, use_container_width=True)
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("Download CSV Locally", st.session_state.df.to_csv(index=False), "candidates.csv", "text/csv")
+            st.divider()
+            st.subheader("🌐 Export to SharePoint")
             
-            with col2:
-                if st.button("🚀 Push to SharePoint"):
-                    if sp_uploader:
-                        with st.spinner("Uploading to SharePoint..."):
-                            # Prepare CSV Buffer
+            # User inputs the SharePoint URL here
+            sp_url = st.text_input(
+                "SharePoint Site URL", 
+                placeholder="https://yourtenant.sharepoint.com/sites/YourSiteName"
+            )
+            
+            if st.button("🚀 Push to SharePoint"):
+                if not sp_url:
+                    st.error("Please enter a valid SharePoint Site URL.")
+                elif sp_uploader:
+                    with st.spinner("Resolving Site IDs and Uploading..."):
+                        try:
+                            # 1. Resolve IDs from the link provided by user
+                            site_id, drive_id = sp_uploader.resolve_site_and_drive(sp_url)
+                            
+                            # 2. Prepare CSV Buffer
                             csv_buffer = io.BytesIO()
                             st.session_state.df.to_csv(csv_buffer, index=False)
                             csv_buffer.seek(0)
                             
-                            try:
-                                # Update these IDs with your specific SharePoint IDs
-                                sp_uploader.upload_csv_to_sharepoint(
-                                    site_id=st.secrets.get("SP_SITE_ID"),
-                                    drive_id=st.secrets.get("SP_DRIVE_ID"),
-                                    folder_path="CandidateExports",
-                                    file_name=f"candidates_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                                    csv_buffer=csv_buffer
-                                )
-                                st.success("Successfully uploaded to SharePoint!")
-                            except Exception as e:
-                                st.error(f"SharePoint Upload Failed: {e}")
-                    else:
-                        st.warning("SharePoint is not configured.")
+                            # 3. Upload
+                            file_name = f"candidates_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+                            sp_uploader.upload_csv_to_sharepoint(
+                                site_id=site_id,
+                                drive_id=drive_id,
+                                folder_path="General", # You can make this a text_input too
+                                file_name=file_name,
+                                csv_buffer=csv_buffer
+                            )
+                            st.success(f"Successfully uploaded '{file_name}' to SharePoint!")
+                        except Exception as e:
+                            st.error(f"SharePoint Error: {e}")
+                else:
+                    st.error("SharePoint uploader not initialized. Check your Secrets.")
+
+            st.divider()
+            st.download_button("Download CSV Locally", st.session_state.df.to_csv(index=False), "candidates.csv", "text/csv")
 
     # 3. MATCH TAB
     with tabs[2]:
