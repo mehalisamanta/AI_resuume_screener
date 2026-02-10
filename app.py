@@ -16,6 +16,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from dotenv import load_dotenv
 from urllib.parse import urlparse, unquote
+import pytesseract
+from PIL import Image
+
 
 # --------------------------------------------------
 # ENV CONFIG (BACKEND ONLY)
