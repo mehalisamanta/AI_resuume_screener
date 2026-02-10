@@ -1,11 +1,11 @@
-name: Streamlit Deployment
+name: Streamlit Deployment & SharePoint Test
 
 on:
   push:
-    branches: [ main ]  # Make sure this matches your branch name
+    branches: [ main ] 
 
 jobs:
-  deploy:
+  test-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -21,7 +21,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # This is where your GitHub Secrets are injected into the environment
+      # NEW STEP: Automated SharePoint Connection Test
+      # This pulls secrets directly from the GitHub Vault for verification
+      - name: Verify SharePoint Connection
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          python -c "
+          import os
+          from sharepoint_uploader import SharePointUploader
+          try:
+              uploader = SharePointUploader(
+                  tenant_id=os.getenv('AZURE_TENANT_ID'),
+                  client_id=os.getenv('AZURE_CLIENT_ID'),
+                  client_secret=os.getenv('AZURE_CLIENT_SECRET')
+              )
+              print('✅ GitHub Secrets successfully pulled! Authentication verified.')
+          except Exception as e:
+              print(f'❌ Failed to pull or use secrets: {e}')
+              exit(1)
+          "
+
+      # Verification step to ensure Streamlit starts
       - name: Run App (Verification)
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -29,6 +52,5 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          # Use this to test if the app starts correctly
           python -m streamlit run app.py --server.headless true & 
-          sleep 10 && kill $!
+          sleep 15 && kill $!
