@@ -1,0 +1,8 @@
+- name: Run Streamlit App
+        env:
+          # This connects the hidden GitHub Secret to the Python Environment Variable
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: streamlit run app.py
